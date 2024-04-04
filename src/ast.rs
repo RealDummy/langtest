@@ -283,7 +283,7 @@ fn primary(tokens: &mut Tokenized) -> Expr {
     if let Some(true) = tokens.matches(&[Token::LParen]) {
         let exp = expression(tokens);
         tokens.consume(Token::RParen, "expected ')'.");
-        return exp;
+        return Expr::Group(Box::new(exp));
     }
     if let Some(true) = tokens.matches(&[Token::NewLine]) {
         return expression(tokens);
@@ -293,8 +293,8 @@ fn primary(tokens: &mut Tokenized) -> Expr {
 }
 
 fn extract_stringy_token(slice: Range<usize>, input: &str) -> Option<Token> {
-    if input.chars().next() == Some('\"') { 
-        if input.chars().last() == Some('\"') {
+    if input[slice.clone()].chars().next() == Some('\"') { 
+        if input[slice.clone()].chars().last() == Some('\"') && slice.len() != 1 {
             return Some(Token::EscapedLiteral(Arc::from(&input[slice.clone()])));
         } else {
             return None;
@@ -374,9 +374,16 @@ fn precedence() {
 }
 
 #[test]
+fn stringy() {
+    let input = r#"" 1 +2" + "3""#;
+    let output = Expr::Binary(Box::new(Expr::Literal(Token::EscapedLiteral("\" 1 +2\"".into()))), Token::Plus, Box::new(Expr::Literal(Token::EscapedLiteral("\"3\"".into()))));
+    assert_eq!(expression(&mut Tokenized::new(input)), output);
+}
+
+#[test]
 fn group() {
     let input = r#"(a+b)*c"#;
-    let output = Expr::Binary(Box::new(Expr::Binary(var("a"), Token::Plus, var("b"))), Token::Star, var("c"));
+    let output = Expr::Binary(Box::new(Expr::Group(Box::new(Expr::Binary(var("a"), Token::Plus, var("b"))))), Token::Star, var("c"));
     assert_eq!(expression(&mut Tokenized::new(input)), output);
 }
 
