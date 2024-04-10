@@ -29,6 +29,8 @@ pub enum Token {
     RSquare,
     True,
     False,
+    Print,
+    Let,
     Number(Arc<str>),
     Symbol(Arc<str>),
     EscapedLiteral(Arc<str>),
@@ -60,11 +62,17 @@ impl Debug for Token {
             LSquare=>cc("["),
             RSquare=>cc("]"),
             NewLine=>cc("\\n"),
-            True=>cc("true"),
-            False=>cc("false"),
+            True=>cc("-true-"),
+            False=>cc("-false-"),
+            Print=>cc("-print-"),
+            Let=>cc("-let-"),
             Number(s)=>cc(s),
             Symbol(s)=>cc(s),
-            EscapedLiteral(s)=>cc(s),
+            EscapedLiteral(s)=>{
+                cc("\"");
+                cc(s);
+                cc("\"");
+            }
             EOF => (),
         };
         Ok(())
@@ -146,7 +154,7 @@ impl Tokenized {
         loop{
             match self.peek() {
                 Some(Token::WhiteSpace) => (),
-                Some(Token::NewLine) => {self.line_count += 1},
+                Some(Token::NewLine) => {self.line_count += 1; break;},
                 _ => {break;}
             }
             self.current += 1;
@@ -177,10 +185,9 @@ impl Tokenized {
         }
         Some(false)
     }
-    pub fn consume(&mut self, expected: Token, err: &str) {
-        let did_consume = self.matches(&[expected]);
-        if let Some(true) = did_consume {
-            return;
+    pub fn consume(&mut self, expected: Token, err: &str) -> Token {
+        if Some(expected) == self.peek() {
+            return self.advance().unwrap();
         }
         panic!("parse error: {err}");
     }
@@ -209,6 +216,10 @@ lazy_static::lazy_static! {
             ("}", RCurly),
             ("[", LSquare),
             ("]", RSquare),
+            ("true", True),
+            ("false", False),
+            ("print", Print),
+            ("let", Let),
             ("\n", NewLine),
             ("\r\n", NewLine),
         ])
@@ -216,7 +227,7 @@ lazy_static::lazy_static! {
     static ref DUMB_ESCAPED_LITERAL: Token = Token::EscapedLiteral("".into());
     static ref DUMB_NUMBER: Token = Token::Number("".into());
     static ref DUMB_SYMBOL: Token = Token::Symbol("".into());
-    static ref DUMB_USER_TOKENS: [Token; 3] = [DUMB_ESCAPED_LITERAL.clone(), DUMB_NUMBER.clone(), DUMB_SYMBOL.clone()];
+    static ref LITERAL_TOKENS: [Token; 6] = [DUMB_ESCAPED_LITERAL.clone(), DUMB_NUMBER.clone(), DUMB_SYMBOL.clone(), Token::True, Token::False, Token::Print];
 }
 const EQUALITY_OP: &[Token] = {
     use Token::*;
@@ -238,6 +249,61 @@ const LEFT_UNARY_OP: &[Token] = {
     use  Token::*;
     &[Star, Slash]
 };
+
+#[derive(Debug)]
+pub enum Statement {
+    Expression(Expr),
+    Print(Expr),
+    Var(Arc<str>, Expr),
+}
+
+pub fn parse(tokens: &mut Tokenized) -> Vec<Statement> {
+    let mut prog = Vec::new();
+    while tokens.peek() != Some(Token::EOF) {
+        prog.push(declaration(tokens))
+    }
+    prog
+
+}
+
+pub fn declaration(tokens: &mut Tokenized) -> Statement {
+
+    if let Some(true) = tokens.matches(&[Token::Let]) {
+        return var_decl(tokens);
+    }
+    return statement(tokens);
+}
+pub fn var_decl(tokens: &mut Tokenized) -> Statement {
+    let Token::Symbol(name) = tokens.consume(DUMB_SYMBOL.clone(), "expected identifier") else {
+        panic!();
+    };
+    tokens.consume(Token::Equal, "expected =");
+
+    let init = expression(tokens);
+    tokens.consume(Token::NewLine, "expected new line");
+
+
+    return Statement::Var(name, init);
+}
+
+pub fn statement(tokens: &mut Tokenized) -> Statement {
+
+    if tokens.matches(&[Token::Print]).unwrap() {
+        return print_statement(tokens);
+    }
+    return expression_statement(tokens);
+}
+
+pub fn print_statement(tokens: &mut Tokenized) -> Statement {
+    let expr = expression(tokens);
+    tokens.consume(Token::NewLine, "expected newline");
+    return Statement::Print(expr);
+}
+pub fn expression_statement(tokens: &mut Tokenized) -> Statement {
+    let expr = expression(tokens);
+    tokens.consume(Token::NewLine, "expected newline");
+    return Statement::Expression(expr);
+}
 
 pub fn expression(tokens: &mut Tokenized) -> Expr {
     return equality(tokens);
@@ -277,7 +343,7 @@ fn left_unary(tokens: &mut Tokenized) -> Expr {
     primary(tokens)
 }
 fn primary(tokens: &mut Tokenized) -> Expr {
-    if let Some(true) = tokens.matches(&(*DUMB_USER_TOKENS)) {
+    if let Some(true) = tokens.matches(&(*LITERAL_TOKENS))  {
         return Expr::Literal(tokens.prev().unwrap());
     }
     if let Some(true) = tokens.matches(&[Token::LParen]) {
@@ -398,4 +464,11 @@ ccccccccc
     let out = Expr::Literal(Token::EscapedLiteral(r#""foo""#.into()));
     assert_eq!(expression(&mut Tokenized::new(input)), out);
 
+}
+
+#[test]
+fn bool() {
+    let input = "false";
+    let output = Expr::Literal(Token::False);
+    assert_eq!(expression(&mut Tokenized::new(input)), output);
 }

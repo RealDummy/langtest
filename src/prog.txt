@@ -1,1 +1,6 @@
-1 + 2
+let a = 1 + 2 * 3
+let b = a * a
+print a + b
+let yes = true
+let no = false
+print yes == no == no
