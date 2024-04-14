@@ -1,8 +1,10 @@
-use std::fmt::{Binary, Debug, Write};
+use std::fmt::{Debug, Write};
 use std::rc::Rc;
 use std::{collections::HashMap, ops::Range};
-use std::sync::{Arc, Once};
+use std::sync::Arc;
 use lazy_static;
+
+use crate::run;
 
 #[derive(Clone)]
 pub enum Token {
@@ -31,15 +33,21 @@ pub enum Token {
     False,
     Print,
     Let,
+    If,
+    Else,
     Number(Arc<str>),
     Symbol(Arc<str>),
     EscapedLiteral(Arc<str>),
     EOF,
+    Comma,
+    Func,
+    Return,
+    While,
 }
 impl Debug for Token {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use Token::*;
-        let mut cc = |s: &str| s.chars().for_each(|c| {f.write_char(c);});
+        let mut cc = |s: &str| f.write_str(s);
         match self {
             Plus=>cc("+"),
             Minus=>cc("-"),
@@ -69,13 +77,19 @@ impl Debug for Token {
             Number(s)=>cc(s),
             Symbol(s)=>cc(s),
             EscapedLiteral(s)=>{
-                cc("\"");
-                cc(s);
-                cc("\"");
+                cc("\"")?;
+                cc(s)?;
+                cc("\"")?;
+                Ok(())
             }
-            EOF => (),
-        };
-        Ok(())
+            EOF => Ok(()),
+            If => cc("if"),
+            Else => cc("else"),
+            Comma => cc(","),
+            Func => cc("func"),
+            Return => cc("return"),
+            While => cc("while"),
+        }
     }
 }
 
@@ -94,13 +108,15 @@ impl PartialEq for Token {
 
 type Boxpr = Box<Expr>;
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone)]
 pub enum Expr {
     Binary(Boxpr, Token, Boxpr),
     LUnary(Token, Boxpr),
     RUnary(Boxpr, Token),
     Literal(Token),
+    Assign(Token, Boxpr),
     Group(Boxpr),
+    FnCall(Boxpr, Vec<Expr>),
 }
 
 impl Debug for Expr {
@@ -111,8 +127,33 @@ impl Debug for Expr {
             Expr::RUnary(..)=>todo!(),
             Expr::Literal(t) => f.write_fmt(format_args!("{:?}", t)),
             Expr::Group(g)=>f.write_fmt(format_args!("( {g:?} )")),
+            Expr::Assign(n, v)=>f.write_fmt(format_args!("{:?}={:?}", n,v)),
+            Expr::FnCall(fe, args) => {
+                f.write_fmt(format_args!("{:?}( ", fe))?;
+                for (i, arg) in args.iter().enumerate() {
+                    match i {
+                        n if n == args.len() => f.write_fmt(format_args!("{:?} )", arg)),
+                        _ => f.write_fmt(format_args!("{:?}, ", arg)),
+                    };
+                };
+                Ok(())
+            } ,
+
         }
     }
+}
+
+#[derive(Debug)]
+struct ParserError {
+    line: usize,
+    char: usize,
+    reason: String,
+}
+
+#[derive(Debug)]
+enum ParserState {
+    Error(ParserError),
+    Ok,
 }
 
 #[derive(Debug)]
@@ -121,6 +162,7 @@ pub struct Tokenized {
     current: usize,
     prev_token: Option<usize>,
     line_count: usize,
+    state: ParserState
 }
 impl Tokenized {
     pub fn new(input: &str) -> Self {
@@ -140,11 +182,13 @@ impl Tokenized {
         if let Some(t) = extract_token(curr_token.clone(), input) {
             tokens.push(t.0);
         }
+
         Self {
             tokens,
             current: 0,
             prev_token: None,
             line_count: 0,
+            state: ParserState::Ok
         }
     }
     fn prev(&self) -> Option<Token> {
@@ -154,12 +198,28 @@ impl Tokenized {
         loop{
             match self.peek() {
                 Some(Token::WhiteSpace) => (),
-                Some(Token::NewLine) => {self.line_count += 1; break;},
+                Some(Token::NewLine) => {break;},
                 _ => {break;}
             }
             self.current += 1;
         }
     }
+    fn eat_space(&mut self) {
+        loop{
+            match self.peek() {
+                Some(Token::WhiteSpace) => (),
+                Some(Token::NewLine) => {self.line_count += 1;},
+                _ => {break;}
+            }
+            self.current += 1;
+        }
+    }
+    // fn consume_statment_ender(&mut self) {
+        // let Some(true) = self.matches(&[Token::NewLine, Token::RCurly]) else {
+        //     panic!("expected end of statment, found {:?}", self.peek());
+        // };
+    //     self.eat_space();
+    // }
     fn skip_next(&mut self) {
         self.current += 1;
         self.skip_whitespace();
@@ -189,7 +249,7 @@ impl Tokenized {
         if Some(expected) == self.peek() {
             return self.advance().unwrap();
         }
-        panic!("parse error: {err}");
+        panic!("parse error: {err} ({})\n{:?}", self.line_count, self.tokens);
     }
 }
 
@@ -222,6 +282,12 @@ lazy_static::lazy_static! {
             ("let", Let),
             ("\n", NewLine),
             ("\r\n", NewLine),
+            ("if", If),
+            ("else", Else),
+            (",", Comma),
+            ("func", Func),
+            ("return", Return),
+            ("while", While),
         ])
     };
     static ref DUMB_ESCAPED_LITERAL: Token = Token::EscapedLiteral("".into());
@@ -250,17 +316,28 @@ const LEFT_UNARY_OP: &[Token] = {
     &[Star, Slash]
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Statement {
     Expression(Expr),
+    Block(Vec<Statement>),
     Print(Expr),
+    Conditional(Expr, Box<Statement>, Option<Box<Statement>>),
     Var(Arc<str>, Expr),
+    FuncDef(Arc<str>, Vec<Token>, Box<Statement>),
+    Return(Option<Expr>),
+    While(Expr, Box<Statement>),
+}
+impl PartialEq for Statement {
+    fn eq(&self, other: &Self) -> bool {
+        false
+    }
 }
 
 pub fn parse(tokens: &mut Tokenized) -> Vec<Statement> {
     let mut prog = Vec::new();
     while tokens.peek() != Some(Token::EOF) {
-        prog.push(declaration(tokens))
+        let stmt = declaration(tokens);
+        prog.push(stmt);
     }
     prog
 
@@ -271,7 +348,32 @@ pub fn declaration(tokens: &mut Tokenized) -> Statement {
     if let Some(true) = tokens.matches(&[Token::Let]) {
         return var_decl(tokens);
     }
+    if let Some(true) = tokens.matches(&[Token::Func]) {
+        return func_decl(tokens);
+    }
     return statement(tokens);
+}
+pub fn func_decl(tokens: &mut Tokenized) -> Statement {
+    let Token::Symbol(name) = tokens.consume(DUMB_SYMBOL.clone(), "expected func name") else {
+        panic!("heckin");
+    };
+    tokens.consume(Token::LParen, "func start with '('");
+    let mut params = Vec::new();
+    if Some(Token::RParen) != tokens.peek() {
+        loop {
+            params.push(tokens.consume(DUMB_SYMBOL.clone(), "expected arg"));
+            
+            let Some(true) = tokens.matches(&[Token::Comma]) else {
+                break;
+            };
+
+        }
+    }
+    tokens.consume(Token::RParen, "expected ')' after func def");
+    tokens.consume(Token::LCurly, "expected '{' after func def");
+    let body = block(tokens);
+    return Statement::FuncDef(name, params, Box::new(body));
+
 }
 pub fn var_decl(tokens: &mut Tokenized) -> Statement {
     let Token::Symbol(name) = tokens.consume(DUMB_SYMBOL.clone(), "expected identifier") else {
@@ -281,32 +383,103 @@ pub fn var_decl(tokens: &mut Tokenized) -> Statement {
 
     let init = expression(tokens);
     tokens.consume(Token::NewLine, "expected new line");
+    tokens.eat_space();
 
 
     return Statement::Var(name, init);
 }
 
 pub fn statement(tokens: &mut Tokenized) -> Statement {
-
     if tokens.matches(&[Token::Print]).unwrap() {
         return print_statement(tokens);
     }
+    if tokens.matches(&[Token::Return]).unwrap() {
+        return return_statement(tokens);
+    }
+    if tokens.matches(&[Token::LCurly]).unwrap() {
+        return block(tokens);
+    }
+    if tokens.matches(&[Token::If]).unwrap() {
+        return conditional(tokens);
+    }
+    if tokens.matches(&[Token::While]).unwrap() {
+        return while_loop(tokens);
+    }
     return expression_statement(tokens);
+}
+fn while_loop(tokens: &mut Tokenized) -> Statement {
+    let condition = expression(tokens);
+    tokens.eat_space();
+    tokens.consume(Token::LCurly, "expected '{'");
+    let stmt = block(tokens);
+    return Statement::While(condition, Box::new(stmt));
+}
+fn conditional(tokens: &mut Tokenized) -> Statement {
+    let condition = expression(tokens);
+    tokens.eat_space();
+    tokens.consume(Token::LCurly, "expected '{'");
+    let stmt = block(tokens);
+    let mut else_stmt = None;
+    if tokens.matches(&[Token::Else]).unwrap_or(false) {
+        tokens.eat_space();
+        //tokens.consume(Token::LCurly, "expected '{'");
+        else_stmt = Some(statement(tokens));
+    }
+    return Statement::Conditional(condition, Box::new(stmt), else_stmt.map(|e| {Box::new(e)}));
+
+}
+
+fn block(tokens: &mut Tokenized) -> Statement {
+    let mut res = Vec::new();
+    tokens.eat_space();
+    while !tokens.matches(&[Token::RCurly]).unwrap_or(false) {
+        res.push(declaration(tokens));
+    }
+    tokens.eat_space();
+    // tokens.consume(Token::RCurly, "expected '}'");
+    return Statement::Block(res);
 }
 
 pub fn print_statement(tokens: &mut Tokenized) -> Statement {
     let expr = expression(tokens);
-    tokens.consume(Token::NewLine, "expected newline");
+    tokens.eat_space();
     return Statement::Print(expr);
+}
+fn return_statement(tokens: &mut Tokenized) -> Statement {
+    tokens.eat_space();
+    match tokens.peek() {
+        Some(Token::NewLine) | Some(Token::RCurly) | Some(Token::RParen) => {
+            return Statement::Return(None);
+        }
+        _ => ()
+    }
+    let expr = expression(tokens);
+    tokens.eat_space();
+    return Statement::Return(Some(expr));
 }
 pub fn expression_statement(tokens: &mut Tokenized) -> Statement {
     let expr = expression(tokens);
-    tokens.consume(Token::NewLine, "expected newline");
+    tokens.eat_space();
+    // tokens.consume(Token::NewLine, &format!("expected newline, got '{:?}'", tokens.peek()));
+    // tokens.eat_space();
     return Statement::Expression(expr);
 }
 
 pub fn expression(tokens: &mut Tokenized) -> Expr {
-    return equality(tokens);
+    return assignment(tokens);
+}
+
+fn assignment(tokens: &mut Tokenized) -> Expr {
+
+    let e = equality(tokens);
+    if let Some(true) = tokens.matches(&[Token::Equal]) {
+        let value = assignment(tokens);
+        let Expr::Literal(name) = e else {
+            panic!("expected var name");
+        };
+        return Expr::Assign(name, Box::new(value));
+    }
+    return e;
 }
 
 fn binop_impl(tokens: &mut Tokenized, ops: &[Token], lower_precedence: impl Fn(&mut Tokenized)-> Expr) -> Expr {
@@ -340,7 +513,35 @@ fn left_unary(tokens: &mut Tokenized) -> Expr {
         let expr = left_unary(tokens);
         return Expr::LUnary(op, Box::new(expr));
     }
-    primary(tokens)
+
+    return call(tokens);
+}
+fn call(tokens: &mut Tokenized) -> Expr {
+    let mut expr = primary(tokens);
+    loop {
+        if tokens.matches(&[Token::LParen]).unwrap_or(false) {
+            expr = finish_call(tokens, expr);
+        } else {
+            break;
+        }
+    }
+    return expr;
+}
+fn finish_call(tokens: &mut Tokenized, callee: Expr) -> Expr {
+    let mut args = Vec::new();
+        if let Some(Token::RParen) = tokens.peek() {
+            tokens.consume(Token::RParen, "expected ')'");
+            return Expr::FnCall(Box::new(callee), args);
+        }
+        loop {
+            args.push(expression(tokens));
+            let Some(Token::Comma) = tokens.peek() else {
+                break;
+            };
+            tokens.advance();
+        }
+        tokens.consume(Token::RParen, "expected ')'");
+        return Expr::FnCall(Box::new(callee), args);
 }
 fn primary(tokens: &mut Tokenized) -> Expr {
     if let Some(true) = tokens.matches(&(*LITERAL_TOKENS))  {
@@ -351,11 +552,11 @@ fn primary(tokens: &mut Tokenized) -> Expr {
         tokens.consume(Token::RParen, "expected ')'.");
         return Expr::Group(Box::new(exp));
     }
-    if let Some(true) = tokens.matches(&[Token::NewLine]) {
+    if let Some(true) = tokens.matches(&[Token::NewLine, Token::RCurly]) {
         return expression(tokens);
 
     }
-    panic!("syntax error {:?}", tokens);
+    panic!("syntax error {:?} ({:?})", tokens.peek(), tokens);
 }
 
 fn extract_stringy_token(slice: Range<usize>, input: &str) -> Option<Token> {
@@ -471,4 +672,16 @@ fn bool() {
     let input = "false";
     let output = Expr::Literal(Token::False);
     assert_eq!(expression(&mut Tokenized::new(input)), output);
+}
+
+#[test]
+fn assign() {
+    let input = "a=b";
+    let out = Expr::Assign(Token::Symbol("a".into()), var("b"));
+    assert_eq!(expression(&mut Tokenized::new(input)), out);
+}
+#[test]
+fn block_spacing() {
+    let input = "if1==2{}";
+    parse(&mut Tokenized::new(input));
 }

@@ -1,6 +1,21 @@
+
+func ident() {
+    return func ident_impl(a) {
+        return a
+    }
+}
+func square(a) {
+    return a * a
+}
+let a = 2
+while a < 1000000 {
+    a = square(a)
+}
+
+print ident()(a)
+
 let a = 1 + 2 * 3
-let b = a * a
-print a + b
-let yes = true
-let no = false
-print yes == no == no
+let b = square(a)
+let c = square(b)
+if 56==c{print"yay"}else{print"nooo"}
+print c

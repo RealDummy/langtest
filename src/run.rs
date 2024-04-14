@@ -1,22 +1,62 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
 
-use crate::{ast::{Expr, Statement, Token}, eval};
+use crate::{ast::Statement, eval::{self, Value}};
 
+#[derive(Clone, Debug)]
+struct EnvInner {
+    parent: Option<Env>,
+    scope: HashMap<Arc<str>, eval::Value>,
+}
+impl PartialEq for EnvInner {
+    fn eq(&self, other: &Self) -> bool {
+        false
+    }
+}
+#[derive(Clone, Debug, PartialEq)]
 pub struct Env {
-    vars: HashMap<Arc<str>, eval::Value>
+    inner: Rc<RefCell<EnvInner>>,
+    n: usize,
 }
 
 impl Env {
     pub fn new() -> Self {
         Self {
-            vars: HashMap::new()
+            inner: Rc::new(RefCell::new(EnvInner {
+                parent: None,
+                scope: HashMap::new()
+            })),
+            n: 0
         }
     }
     pub fn assign(&mut self, name: &Arc<str>, val: eval::Value) {
-        self.vars.insert(name.clone(), val);
+        self.inner.borrow_mut().scope.insert(name.clone(), val);
     }
     pub fn find(&self, name: &str) -> Option<eval::Value> {
-        self.vars.get(name).cloned()
+        let mut node = self.inner.clone();
+        loop {
+            node = match node.clone().as_ref().borrow().scope.get(name) {
+                None => {
+                    let Some(node_rc) = &node.as_ref().borrow().parent else {
+                        return None;
+                    };
+                    node_rc.inner.clone()
+                }
+                some => {
+                    return some.cloned();
+                }
+            }
+        }
+    }
+    pub fn push_scope(&mut self) {
+        self.n += 1;
+        let parent = self.inner.clone();
+        self.inner = Rc::new(RefCell::new(EnvInner {parent: Some(Env { inner: parent, n: 0 }) , scope: HashMap::new()}));
+        
+    }
+    pub fn pop_scope(&mut self) {
+        self.n -= 1;
+        let parent = self.inner.as_ref().borrow().parent.clone().unwrap().inner;
+        self.inner = parent;
     }
 }
 
@@ -25,25 +65,90 @@ pub struct Interpreter {
     prog: Vec<Statement>,
 }
 
+pub fn eval_statement(statement: &Statement, env: &mut Env) -> Option<Value> {
+        match statement {
+            Statement::Expression(e) => {
+                eval::eval(e, env);
+            },
+            Statement::Print(e) => {
+                let value = eval::eval(e, env);
+                println!("{}", value);
+            }
+            Statement::Var(name, val) => {
+                let v = eval::eval(val, env);
+                env.assign(name, v);
+            }
+            Statement::Block(block) => {
+                env.push_scope();
+                for s in block {
+                    match eval_statement(s, env) {
+                        None => (),
+                        some => {
+                            env.pop_scope();
+                            return some;
+                        }
+                    }
+                }
+                env.pop_scope();
+            }
+            Statement::Conditional(cond, do_if, do_else) => {
+                match eval::eval(cond, env) {
+                    eval::Value::Bool(c) => {
+                        if c {
+                            match eval_statement(&do_if, env) {
+                                None => (),
+                                some => return some,
+                            }
+                        } else {
+                            if let Some(do_else) = do_else {
+                                match eval_statement(&do_else, env) {
+                                    None => (),
+                                    some => return some,
+                                }                            
+                            }
+                        }
+                    }
+                    _ => {
+                        panic!("if statement codition is not a bool");
+                    }
+                }
+            }
+            Statement::FuncDef(name, args, body) => {
+                env.assign(name, eval::Value::Func(args.clone(), body.clone(), env.clone()));
+            }
+            Statement::Return(e) => {
+                let Some(e) = e else {
+                    return Some(Value::Unit);
+                };
+                return Some(eval::eval(e, env));
+            }
+            Statement::While(e, body) => {
+                let Statement::Block(body) = body.as_ref() else {
+                    panic!();
+                };
+                while matches!(eval::eval(e, env), Value::Bool(true)) {
+                    for stmt in body {
+                        match eval_statement(&stmt, env) {
+                            None => (),
+                            some => return some,
+                        }
+                    }
+                }
+            }
+        }
+        return None;
+}
+
 impl Interpreter {
     pub fn new(prog: Vec<Statement>) -> Self {
         Self {
             env: Env::new(),
-            prog
+            prog,
         }
     }
     pub fn run(&mut self) {
         for statment in &self.prog {
-            match statment {
-                Statement::Expression(_) => (),
-                Statement::Print(e) => {
-                    let value = eval::eval(e, &self.env);
-                    println!("{:?}", value);
-                }
-                Statement::Var(name, val) => {
-                    self.env.assign(name, eval::eval(val, &self.env));
-                }
-            }
+            eval_statement(statment, &mut self.env);
         }
     }
 }

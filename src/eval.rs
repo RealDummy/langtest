@@ -1,10 +1,29 @@
-use crate::{ast::{self, Expr, Token}, run::Env};
+use std::{fmt::Display, sync::Arc};
+
+use crate::{ast::{Expr, Statement, Token}, run::{eval_statement, Env}};
+
+type StringType = String;
+type IntType = i64;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Value {
-    String(String),
-    Int(i32),
-    Bool(bool)
+    String(StringType),
+    Int(IntType),
+    Bool(bool),
+    Func(Vec<Token>, Box<Statement>, Env),
+    Unit,
+}
+
+impl Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Value::Bool(b) => f.write_fmt(format_args!("{}", b)),
+            Value::Int(i) => f.write_fmt(format_args!("{}", i)),
+            Value::String(s) => f.write_str(&s),
+            Value::Unit => f.write_str("()"),
+            Value::Func(..) => todo!(),
+        }
+    }
 }
 
 fn eq<T: PartialEq>(l:T, r:T) -> Value {
@@ -34,7 +53,7 @@ fn cmp_lte<T: Ord>(l:T, r:T) -> Value {
     }
 }
 
-fn apply_str(mut l: String, op: &Token, r: String) -> Value {
+fn apply_str(mut l: StringType, op: &Token, r: StringType) -> Value {
     match op {
         Token::Plus => {
             l.extend(r.chars());
@@ -52,7 +71,7 @@ fn apply_str(mut l: String, op: &Token, r: String) -> Value {
     }
 }
 
-fn apply_int(mut l: i32, op: &Token, r: i32) -> Value {
+fn apply_int(l: IntType, op: &Token, r: IntType) -> Value {
     let res = match op {
         Token::Plus => l+r,
         Token::Minus =>l-r,
@@ -118,6 +137,8 @@ fn eval_bin(l: Value, op: &Token, r: Value) -> Value {
             }; 
             return apply_bool(lb, op, rb);
         }
+        Value::Unit => panic!(),
+        Value::Func(..) => panic!(),
     }
 }
 
@@ -129,7 +150,7 @@ fn unescape_string(escaped: &str) -> &str {
     &escaped[1..escaped.len()-1]
 }
 
-pub fn eval(e: &Expr, env: &Env) -> Value {
+pub fn eval(e: &Expr, env: &mut Env) -> Value {
     match e {
         Expr::Binary(lhs, op, rhs) => {
             eval_bin(eval(lhs, env), op, eval(rhs, env))
@@ -155,8 +176,31 @@ pub fn eval(e: &Expr, env: &Env) -> Value {
                 }
             }
         }
+        Expr::FnCall(func, args) => {
+            let Value::Func(arg_names, body, mut fn_env) = eval(func, env) else {
+                panic!("expected func");
+            };
+            let args: Vec<_> = args.iter().map(|a| eval(a, env)).collect();
+            assert!(args.len() == arg_names.len());
+            for (name, val) in arg_names.iter().zip(args) {
+                let Token::Symbol(name) = name else {
+                    panic!("no symbol?");
+                };
+                env.assign(name, val);
+            }
+            let v = eval_statement(&body, &mut fn_env).unwrap_or(Value::Unit);
+            v
+        },
         Expr::Group(e) => eval(e, env),
-        Expr::RUnary(.. ) => todo!()
+        Expr::RUnary(.. ) => todo!(),
+        Expr::Assign(name, value) => {
+            let Token::Symbol(name) = name else {
+                panic!("expected symbol")
+            };
+            let e = eval(value, env);
+            env.assign(name, e);
+            Value::Unit
+        }
     }
 }
 
