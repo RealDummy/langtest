@@ -29,6 +29,7 @@ pub enum Token {
     True,
     False,
     Print,
+    Vec,
     Let,
     If,
     Else,
@@ -40,6 +41,9 @@ pub enum Token {
     Func,
     Return,
     While,
+    Struct,
+    Dot,
+    Enum,
 }
 impl Debug for Token {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -86,6 +90,10 @@ impl Debug for Token {
             Func => cc("func"),
             Return => cc("return"),
             While => cc("while"),
+            Struct => cc("struct"),
+            Dot => cc("."),
+            Vec => cc("vec"),
+            Enum => cc("enum"),
         }
     }
 }
@@ -114,6 +122,9 @@ pub enum Expr {
     Assign(Token, Boxpr),
     Group(Boxpr),
     FnCall(Boxpr, Vec<Expr>),
+    Get(Boxpr, Token),
+    Set(Boxpr, Token, Boxpr),
+    VecInit(Vec<Expr>),
 }
 
 impl Debug for Expr {
@@ -125,6 +136,8 @@ impl Debug for Expr {
             Expr::Literal(t) => f.write_fmt(format_args!("{:?}", t)),
             Expr::Group(g)=>f.write_fmt(format_args!("( {g:?} )")),
             Expr::Assign(n, v)=>f.write_fmt(format_args!("{:?}={:?}", n,v)),
+            Expr::Get(n, field) => f.write_fmt(format_args!("{n:?}.{field:?}")),
+            Expr::Set(n, field, v) => f.write_fmt(format_args!("{n:?}.{field:?} = {v:?}")),
             Expr::FnCall(fe, args) => {
                 f.write_fmt(format_args!("{:?}( ", fe))?;
                 for (i, arg) in args.iter().enumerate() {
@@ -135,6 +148,15 @@ impl Debug for Expr {
                 };
                 Ok(())
             } ,
+            Expr::VecInit(args) => {
+                for (i, arg) in args.iter().enumerate() {
+                    match i {
+                        n if n == args.len() => f.write_fmt(format_args!("{:?} )", arg)),
+                        _ => f.write_fmt(format_args!("{:?}, ", arg)),
+                    }?
+                };
+                Ok(())
+            }
 
         }
     }
@@ -280,6 +302,10 @@ lazy_static::lazy_static! {
             ("func", Func),
             ("return", Return),
             ("while", While),
+            ("struct", Struct),
+            (".", Dot),
+            ("vec", Vec),
+            ("enum", Enum),
         ])
     };
     static ref DUMB_ESCAPED_LITERAL: Token = Token::EscapedLiteral("".into());
@@ -318,6 +344,8 @@ pub enum Statement {
     FuncDef(Arc<str>, Vec<Token>, Box<Statement>),
     Return(Option<Expr>),
     While(Expr, Box<Statement>),
+    StructDef(Arc<str>, Vec<Token>),
+    EnumDef(Arc<str>, Vec<Token>),
 }
 impl PartialEq for Statement {
     fn eq(&self, _other: &Self) -> bool {
@@ -345,8 +373,51 @@ pub fn declaration(tokens: &mut Tokenized) -> Statement {
     if let Some(true) = tokens.matches(&[Token::Func]) {
         return func_decl(tokens);
     }
+    if let Some(true) = tokens.matches(&[Token::Struct]) {
+        return struct_decl(tokens);
+    }
+    if let Some(true) = tokens.matches(&[Token::Enum]) {
+        return enum_decl(tokens);
+    }
     return statement(tokens);
 }
+fn enum_decl(tokens: &mut Tokenized) -> Statement {
+    let Token::Symbol(name) = tokens.consume(DUMB_SYMBOL.clone(), "expected struct name") else {
+        panic!("heckin");
+    };
+    tokens.consume(Token::LCurly, "expected '{'");
+    let mut members = Vec::new();
+    while tokens.peek() != Some(Token::RCurly) {
+        tokens.skip_space();
+        let member = tokens.consume(DUMB_SYMBOL.clone(), "expected ident");
+        members.push(member);
+        tokens.consume(Token::Comma, "expected sep");
+        tokens.skip_space();
+
+    }
+    tokens.advance();
+    tokens.skip_space();
+    return Statement::EnumDef(name, members);
+}
+fn struct_decl(tokens: &mut Tokenized) -> Statement {
+    let Token::Symbol(name) = tokens.consume(DUMB_SYMBOL.clone(), "expected struct name") else {
+        panic!("heckin");
+    };
+    tokens.consume(Token::LCurly, "expected '{'");
+    let mut members = Vec::new();
+    while tokens.peek() != Some(Token::RCurly) {
+        tokens.skip_space();
+        let member = tokens.consume(DUMB_SYMBOL.clone(), "expected ident");
+        members.push(member);
+        tokens.consume(Token::Comma, "expected sep");
+        tokens.skip_space();
+
+    }
+    tokens.advance();
+    tokens.skip_space();
+    return Statement::StructDef(name, members);
+}
+
 pub fn func_decl(tokens: &mut Tokenized) -> Statement {
     let Token::Symbol(name) = tokens.consume(DUMB_SYMBOL.clone(), "expected func name") else {
         panic!("heckin");
@@ -469,11 +540,14 @@ fn assignment(tokens: &mut Tokenized) -> Expr {
     let e = equality(tokens);
     if let Some(true) = tokens.matches(&[Token::Equal]) {
         let value = assignment(tokens);
-        let Expr::Literal(name) = e else {
-            panic!("expected var name");
+        if let Expr::Literal(name) = e {
+            return Expr::Assign(name, Box::new(value));
         };
-        return Expr::Assign(name, Box::new(value));
-    }
+        if let Expr::Get(e, f) = e {
+            return  Expr::Set(e, f, Box::new(value));
+        }
+        panic!("expected var name"); 
+    };
     return e;
 }
 
@@ -516,27 +590,31 @@ fn call(tokens: &mut Tokenized) -> Expr {
     loop {
         if tokens.matches(&[Token::LParen]).unwrap_or(false) {
             expr = finish_call(tokens, expr);
+        } else if tokens.matches(&[Token::Dot]).unwrap_or(false) {
+            let field = tokens.consume(DUMB_SYMBOL.clone(), "expected ident");
+            expr = Expr::Get(Box::new(expr), field);
         } else {
             break;
         }
     }
     return expr;
 }
+
 fn finish_call(tokens: &mut Tokenized, callee: Expr) -> Expr {
     let mut args = Vec::new();
-        if let Some(Token::RParen) = tokens.peek() {
-            tokens.advance();
-            return Expr::FnCall(Box::new(callee), args);
-        }
-        loop {
-            args.push(expression(tokens));
-            let Some(Token::Comma) = tokens.peek() else {
-                break;
-            };
-            tokens.advance();
-        }
-        tokens.consume(Token::RParen, "expected ')'");
+    if let Some(Token::RParen) = tokens.peek() {
+        tokens.advance();
         return Expr::FnCall(Box::new(callee), args);
+    }
+    loop {
+        args.push(expression(tokens));
+        let Some(Token::Comma) = tokens.peek() else {
+            break;
+        };
+        tokens.advance();
+    }
+    tokens.consume(Token::RParen, "expected ')'");
+    return Expr::FnCall(Box::new(callee), args);
 }
 fn primary(tokens: &mut Tokenized) -> Expr {
     if let Some(true) = tokens.matches(&(*LITERAL_TOKENS))  {
@@ -546,6 +624,17 @@ fn primary(tokens: &mut Tokenized) -> Expr {
         let exp = expression(tokens);
         tokens.consume(Token::RParen, "expected ')'.");
         return Expr::Group(Box::new(exp));
+    }
+    if let Some(true) = tokens.matches(&[Token::LSquare]) {
+        let mut exprs = Vec::new();
+        while tokens.peek() != Some(Token::RSquare) {
+            tokens.skip_space();
+            exprs.push(expression(tokens));
+            tokens.consume(Token::Comma, "expected sep");
+            tokens.skip_space();
+        }
+        tokens.advance();
+        return Expr::VecInit(exprs);
     }
     match tokens.peek() {
         n@Some(Token::NewLine) => {

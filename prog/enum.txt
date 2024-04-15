@@ -1,0 +1,13 @@
+enum foo {
+    a,
+    b,
+    c,
+}
+
+enum bar {
+    a2,
+    b2,
+    c2,
+}
+
+print [a, a2,]

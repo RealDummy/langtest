@@ -1,9 +1,0 @@
-let b = "top"
-
-func a() {
-    print b
-}
-
-print a()
-b = "bottom"
-print a()
