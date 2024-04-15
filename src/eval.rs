@@ -182,13 +182,15 @@ pub fn eval(e: &Expr, env: &mut Env) -> Value {
             };
             let args: Vec<_> = args.iter().map(|a| eval(a, env)).collect();
             assert!(args.len() == arg_names.len());
+            fn_env.push_scope();
             for (name, val) in arg_names.iter().zip(args) {
                 let Token::Symbol(name) = name else {
                     panic!("no symbol?");
                 };
-                env.assign(name, val);
+                fn_env.assign(name, val);
             }
             let v = eval_statement(&body, &mut fn_env).unwrap_or(Value::Unit);
+            fn_env.pop_scope();
             v
         },
         Expr::Group(e) => eval(e, env),
@@ -198,7 +200,7 @@ pub fn eval(e: &Expr, env: &mut Env) -> Value {
                 panic!("expected symbol")
             };
             let e = eval(value, env);
-            env.assign(name, e);
+            env.set(name, e);
             Value::Unit
         }
     }

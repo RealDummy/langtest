@@ -1,21 +1,9 @@
+let b = "top"
 
-func ident() {
-    return func ident_impl(a) {
-        return a
-    }
-}
-func square(a) {
-    return a * a
-}
-let a = 2
-while a < 1000000 {
-    a = square(a)
+func a() {
+    print b
 }
 
-print ident()(a)
-
-let a = 1 + 2 * 3
-let b = square(a)
-let c = square(b)
-if 56==c{print"yay"}else{print"nooo"}
-print c
+print a()
+b = "bottom"
+print a()

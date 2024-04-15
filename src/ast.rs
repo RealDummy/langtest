@@ -1,7 +1,7 @@
 use std::fmt::{Debug, Write};
 use std::rc::Rc;
 use std::{collections::HashMap, ops::Range};
-use std::sync::Arc;
+use std::sync::{Arc, TryLockResult};
 use lazy_static;
 
 use crate::run;
@@ -144,10 +144,10 @@ impl Debug for Expr {
 }
 
 #[derive(Debug)]
-struct ParserError {
-    line: usize,
-    char: usize,
-    reason: String,
+pub struct ParserError {
+    pub line: usize,
+    pub char: usize,
+    pub reason: String,
 }
 
 #[derive(Debug)]
@@ -194,7 +194,7 @@ impl Tokenized {
     fn prev(&self) -> Option<Token> {
         self.tokens.get(self.prev_token?).cloned()
     }
-    fn skip_whitespace(&mut self) {
+    fn skip_blank_space(&mut self) {
         loop{
             match self.peek() {
                 Some(Token::WhiteSpace) => (),
@@ -204,7 +204,7 @@ impl Tokenized {
             self.current += 1;
         }
     }
-    fn eat_space(&mut self) {
+    fn skip_space(&mut self) {
         loop{
             match self.peek() {
                 Some(Token::WhiteSpace) => (),
@@ -214,15 +214,10 @@ impl Tokenized {
             self.current += 1;
         }
     }
-    // fn consume_statment_ender(&mut self) {
-        // let Some(true) = self.matches(&[Token::NewLine, Token::RCurly]) else {
-        //     panic!("expected end of statment, found {:?}", self.peek());
-        // };
-    //     self.eat_space();
-    // }
+
     fn skip_next(&mut self) {
         self.current += 1;
-        self.skip_whitespace();
+        self.skip_blank_space();
     }
     pub fn advance(&mut self) -> Option<Token> {
         self.prev_token = Some(self.current);
@@ -249,7 +244,7 @@ impl Tokenized {
         if Some(expected) == self.peek() {
             return self.advance().unwrap();
         }
-        panic!("parse error: {err} ({})\n{:?}", self.line_count, self.tokens);
+        panic!("parse error: {err}\n({}): {:?}", self.line_count, &self.tokens[self.current..(self.current + 4).min(self.tokens.len())]);
     }
 }
 
@@ -335,9 +330,11 @@ impl PartialEq for Statement {
 
 pub fn parse(tokens: &mut Tokenized) -> Vec<Statement> {
     let mut prog = Vec::new();
+    tokens.skip_space();
     while tokens.peek() != Some(Token::EOF) {
         let stmt = declaration(tokens);
         prog.push(stmt);
+        tokens.skip_space();
     }
     prog
 
@@ -370,8 +367,11 @@ pub fn func_decl(tokens: &mut Tokenized) -> Statement {
         }
     }
     tokens.consume(Token::RParen, "expected ')' after func def");
+    tokens.skip_space();
     tokens.consume(Token::LCurly, "expected '{' after func def");
+    tokens.skip_space();
     let body = block(tokens);
+    tokens.skip_space();
     return Statement::FuncDef(name, params, Box::new(body));
 
 }
@@ -383,8 +383,6 @@ pub fn var_decl(tokens: &mut Tokenized) -> Statement {
 
     let init = expression(tokens);
     tokens.consume(Token::NewLine, "expected new line");
-    tokens.eat_space();
-
 
     return Statement::Var(name, init);
 }
@@ -409,21 +407,21 @@ pub fn statement(tokens: &mut Tokenized) -> Statement {
 }
 fn while_loop(tokens: &mut Tokenized) -> Statement {
     let condition = expression(tokens);
-    tokens.eat_space();
+    tokens.skip_space();
     tokens.consume(Token::LCurly, "expected '{'");
     let stmt = block(tokens);
     return Statement::While(condition, Box::new(stmt));
 }
 fn conditional(tokens: &mut Tokenized) -> Statement {
     let condition = expression(tokens);
-    tokens.eat_space();
+    tokens.skip_space();
     tokens.consume(Token::LCurly, "expected '{'");
     let stmt = block(tokens);
     let mut else_stmt = None;
     if tokens.matches(&[Token::Else]).unwrap_or(false) {
-        tokens.eat_space();
-        //tokens.consume(Token::LCurly, "expected '{'");
-        else_stmt = Some(statement(tokens));
+        tokens.skip_space();
+        tokens.consume(Token::LCurly, "expected '{'");
+        else_stmt = Some(block(tokens));
     }
     return Statement::Conditional(condition, Box::new(stmt), else_stmt.map(|e| {Box::new(e)}));
 
@@ -431,22 +429,22 @@ fn conditional(tokens: &mut Tokenized) -> Statement {
 
 fn block(tokens: &mut Tokenized) -> Statement {
     let mut res = Vec::new();
-    tokens.eat_space();
+    tokens.skip_space();
     while !tokens.matches(&[Token::RCurly]).unwrap_or(false) {
         res.push(declaration(tokens));
+        tokens.skip_space();
     }
-    tokens.eat_space();
-    // tokens.consume(Token::RCurly, "expected '}'");
+    tokens.skip_space();
     return Statement::Block(res);
 }
 
 pub fn print_statement(tokens: &mut Tokenized) -> Statement {
     let expr = expression(tokens);
-    tokens.eat_space();
+    // tokens.skip_space();
     return Statement::Print(expr);
 }
 fn return_statement(tokens: &mut Tokenized) -> Statement {
-    tokens.eat_space();
+    tokens.skip_space();
     match tokens.peek() {
         Some(Token::NewLine) | Some(Token::RCurly) | Some(Token::RParen) => {
             return Statement::Return(None);
@@ -454,12 +452,12 @@ fn return_statement(tokens: &mut Tokenized) -> Statement {
         _ => ()
     }
     let expr = expression(tokens);
-    tokens.eat_space();
+    tokens.skip_space();
     return Statement::Return(Some(expr));
 }
 pub fn expression_statement(tokens: &mut Tokenized) -> Statement {
     let expr = expression(tokens);
-    tokens.eat_space();
+    // tokens.skip_space();
     // tokens.consume(Token::NewLine, &format!("expected newline, got '{:?}'", tokens.peek()));
     // tokens.eat_space();
     return Statement::Expression(expr);
@@ -530,7 +528,7 @@ fn call(tokens: &mut Tokenized) -> Expr {
 fn finish_call(tokens: &mut Tokenized, callee: Expr) -> Expr {
     let mut args = Vec::new();
         if let Some(Token::RParen) = tokens.peek() {
-            tokens.consume(Token::RParen, "expected ')'");
+            tokens.advance();
             return Expr::FnCall(Box::new(callee), args);
         }
         loop {
@@ -552,9 +550,14 @@ fn primary(tokens: &mut Tokenized) -> Expr {
         tokens.consume(Token::RParen, "expected ')'.");
         return Expr::Group(Box::new(exp));
     }
-    if let Some(true) = tokens.matches(&[Token::NewLine, Token::RCurly]) {
-        return expression(tokens);
-
+    match tokens.peek() {
+        n@Some(Token::NewLine) => {
+            // tokens.advance();
+            tokens.skip_space();
+            println!("{n:?} {:?}", &tokens.tokens[tokens.current..tokens.current+2]);
+            return expression(tokens);
+        },
+        _ => ()
     }
     panic!("syntax error {:?} ({:?})", tokens.peek(), tokens);
 }
@@ -567,7 +570,10 @@ fn extract_stringy_token(slice: Range<usize>, input: &str) -> Option<Token> {
             return None;
         }
     };
-    return Some(Token::Symbol(Arc::from(&input[slice.clone()])));
+    if input[slice.clone()].chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return Some(Token::Symbol(Arc::from(&input[slice.clone()])));
+    }
+    return None;
 }
 
 fn is_operator(t: &Token) -> bool {
@@ -585,7 +591,8 @@ fn extract_token(slice: Range<usize>, input: &str) -> Option<(Token, usize)> {
                 None => Some((t.clone(), slice.end)),
                 Some(t2) => if is_operator(&t2.0) {
                     Some(t2)
-                }else {
+                }
+                else {
                     Some((t.clone(), slice.end))
                 }
             }
@@ -606,17 +613,23 @@ fn extract_token(slice: Range<usize>, input: &str) -> Option<(Token, usize)> {
                         return Some((Token::Number(input[slice.clone()].into()), slice.end))
                     }
                 }
-            }
+            };
             match extract_token(slice.end..slice.end+1, input) {
                 Some((t, _)) => {
-                    if matches!(t, Token::Symbol(_) | Token::EscapedLiteral(_)) {
-                        None
-                     }else{
-                        extract_stringy_token(slice.clone(), input).map(|t| (t, slice.end))
+                    if matches!(t, Token::Symbol(_) | Token::EscapedLiteral(_) | Token::Number(_)) {
+                        ();
+                     } else{
+                        return extract_stringy_token(slice.clone(), input).map(|t| (t, slice.end))
                     }
                 },
-                None => None,
+                None => return extract_stringy_token(slice.clone(), input).map(|t| (t, slice.end)),
             }
+            match extract_token(slice.start..slice.end + 1, input) {
+                None => return extract_stringy_token(slice.clone(), input).map(|t| (t, slice.end)),
+                t => {
+                    return t;
+                }
+            };
         }
     }
 }
@@ -682,6 +695,6 @@ fn assign() {
 }
 #[test]
 fn block_spacing() {
-    let input = "if1==2{}";
+    let input = "if 1==2{}";
     parse(&mut Tokenized::new(input));
 }

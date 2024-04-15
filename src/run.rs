@@ -1,8 +1,8 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
+use std::{borrow::BorrowMut, cell::RefCell, collections::HashMap, fmt::{Debug, Write}, rc::Rc, sync::Arc};
 
 use crate::{ast::Statement, eval::{self, Value}};
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct EnvInner {
     parent: Option<Env>,
     scope: HashMap<Arc<str>, eval::Value>,
@@ -12,10 +12,15 @@ impl PartialEq for EnvInner {
         false
     }
 }
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct Env {
     inner: Rc<RefCell<EnvInner>>,
     n: usize,
+}
+impl Debug for Env {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("{}", self.n))
+    }
 }
 
 impl Env {
@@ -23,40 +28,53 @@ impl Env {
         Self {
             inner: Rc::new(RefCell::new(EnvInner {
                 parent: None,
-                scope: HashMap::new()
+                scope: HashMap::new(),
             })),
             n: 0
         }
     }
-    pub fn assign(&mut self, name: &Arc<str>, val: eval::Value) {
-        self.inner.borrow_mut().scope.insert(name.clone(), val);
+    fn closure(&mut self) -> Self {
+        let inner = self.inner().clone();
+        return  Env {
+            inner: Rc::new(RefCell::new(inner)),
+            n: self.n,
+        };
     }
-    pub fn find(&self, name: &str) -> Option<eval::Value> {
-        let mut node = self.inner.clone();
-        loop {
-            node = match node.clone().as_ref().borrow().scope.get(name) {
-                None => {
-                    let Some(node_rc) = &node.as_ref().borrow().parent else {
-                        return None;
-                    };
-                    node_rc.inner.clone()
-                }
-                some => {
-                    return some.cloned();
-                }
-            }
-        }
+    fn inner<'a>(&'a mut self)-> std::cell::RefMut<'a, EnvInner> {
+        self.inner.as_ref().borrow_mut()
+    }
+    pub fn assign(&mut self, name: &Arc<str>, val: eval::Value) {
+        self.inner().scope.insert(name.clone(), val);
+    }
+    pub fn find(&mut self, name: &str) -> Option<eval::Value> {
+        let Some(foo) = self.inner().scope.get(name).cloned() else {
+            return self.inner().parent.as_mut().map(|p| p.find(name)).unwrap_or(None);
+        };
+        return Some(foo);
+    }
+    pub fn set(&mut self, name: &str, val: Value) {
+        match self.inner().scope.get_mut(name) {
+            Some(v) => {
+                *v = val;
+                return;
+            },
+            None => (),
+        };
+        self.inner().parent.as_mut().map(|p| p.set(name, val)).unwrap();
     }
     pub fn push_scope(&mut self) {
-        self.n += 1;
-        let parent = self.inner.clone();
-        self.inner = Rc::new(RefCell::new(EnvInner {parent: Some(Env { inner: parent, n: 0 }) , scope: HashMap::new()}));
+        *self = Env {
+            inner: Rc::new(RefCell::new(EnvInner {
+                scope: HashMap::new(),
+                parent: Some(self.clone()),
+            })),
+            n: self.n + 1,
+        };
         
     }
     pub fn pop_scope(&mut self) {
-        self.n -= 1;
-        let parent = self.inner.as_ref().borrow().parent.clone().unwrap().inner;
-        self.inner = parent;
+        let p = self.inner().parent.clone().unwrap();
+        *self = p;
     }
 }
 
@@ -114,7 +132,10 @@ pub fn eval_statement(statement: &Statement, env: &mut Env) -> Option<Value> {
                 }
             }
             Statement::FuncDef(name, args, body) => {
-                env.assign(name, eval::Value::Func(args.clone(), body.clone(), env.clone()));
+                let mut new_env = env.closure();
+                let func = eval::Value::Func(args.clone(), body.clone(), new_env.clone());
+                env.assign(name, func.clone());
+                new_env.assign(name, func);
             }
             Statement::Return(e) => {
                 let Some(e) = e else {
