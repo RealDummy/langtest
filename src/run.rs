@@ -1,4 +1,4 @@
-use std::{borrow::BorrowMut, cell::RefCell, collections::HashMap, fmt::{Debug, Write}, rc::Rc, sync::Arc};
+use std::{cell::RefCell, collections::HashMap, fmt::Debug, rc::Rc, sync::Arc};
 
 use crate::{ast::Statement, eval::{self, Value}};
 
@@ -8,10 +8,11 @@ struct EnvInner {
     scope: HashMap<Arc<str>, eval::Value>,
 }
 impl PartialEq for EnvInner {
-    fn eq(&self, other: &Self) -> bool {
+    fn eq(&self, _other: &Self) -> bool {
         false
     }
 }
+
 #[derive(Clone, PartialEq)]
 pub struct Env {
     inner: Rc<RefCell<EnvInner>>,

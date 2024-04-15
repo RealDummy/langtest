@@ -1,4 +1,4 @@
-use std::{fmt::Display, sync::Arc};
+use std::fmt::Display;
 
 use crate::{ast::{Expr, Statement, Token}, run::{eval_statement, Env}};
 

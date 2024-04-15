@@ -1,10 +1,7 @@
-use std::fmt::{Debug, Write};
-use std::rc::Rc;
+use std::fmt::Debug;
 use std::{collections::HashMap, ops::Range};
-use std::sync::{Arc, TryLockResult};
+use std::sync::Arc;
 use lazy_static;
-
-use crate::run;
 
 #[derive(Clone)]
 pub enum Token {
@@ -134,7 +131,7 @@ impl Debug for Expr {
                     match i {
                         n if n == args.len() => f.write_fmt(format_args!("{:?} )", arg)),
                         _ => f.write_fmt(format_args!("{:?}, ", arg)),
-                    };
+                    }?
                 };
                 Ok(())
             } ,
@@ -143,18 +140,18 @@ impl Debug for Expr {
     }
 }
 
-#[derive(Debug)]
-pub struct ParserError {
-    pub line: usize,
-    pub char: usize,
-    pub reason: String,
-}
+// #[derive(Debug)]
+// pub struct ParserError {
+//     pub line: usize,
+//     pub char: usize,
+//     pub reason: String,
+// }
 
-#[derive(Debug)]
-enum ParserState {
-    Error(ParserError),
-    Ok,
-}
+// #[derive(Debug)]
+// enum ParserState {
+//     Error(ParserError),
+//     Ok,
+// }
 
 #[derive(Debug)]
 pub struct Tokenized {
@@ -162,7 +159,7 @@ pub struct Tokenized {
     current: usize,
     prev_token: Option<usize>,
     line_count: usize,
-    state: ParserState
+    // state: ParserState
 }
 impl Tokenized {
     pub fn new(input: &str) -> Self {
@@ -188,7 +185,7 @@ impl Tokenized {
             current: 0,
             prev_token: None,
             line_count: 0,
-            state: ParserState::Ok
+            // state: ParserState::Ok
         }
     }
     fn prev(&self) -> Option<Token> {
@@ -323,7 +320,7 @@ pub enum Statement {
     While(Expr, Box<Statement>),
 }
 impl PartialEq for Statement {
-    fn eq(&self, other: &Self) -> bool {
+    fn eq(&self, _other: &Self) -> bool {
         false
     }
 }
@@ -635,7 +632,7 @@ fn extract_token(slice: Range<usize>, input: &str) -> Option<(Token, usize)> {
 }
 
 
-#[ignore = "helper"]
+#[allow(unused)]
 fn var(name: &str) -> Boxpr {
     Box::new(Expr::Literal(Token::Symbol(name.into())))
 }
