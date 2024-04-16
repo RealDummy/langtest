@@ -1,6 +1,6 @@
 use std::{cell::RefCell, collections::{HashMap, HashSet}, fmt::Display, rc::Rc, sync::Arc};
 
-use crate::{ast::{Expr, Statement, Token}, run::{eval_statement, Env, EnvInner}};
+use crate::{ast::{Expr, Statement, Token}, run::{eval_statement, Env}};
 
 type StringType = String;
 type IntType = i64;
@@ -184,6 +184,7 @@ fn eval_bin(l: Value, op: &Token, r: Value) -> Value {
     }
 }
 
+
 fn eval_l_unary(op: &Token, e: Value) -> Value {
     todo!()
 }
@@ -221,7 +222,7 @@ pub fn eval(e: &Expr, env: &mut Env) -> Value {
         Expr::FnCall(func, args) => {
             let fne = eval(func, env);
             let Value::Func(arg_names, body, mut fn_env) = fne.clone() else {
-                let Value::StructDef(ty, field_names) = &fne else {
+                let Value::StructDef(ty, _) = &fne else {
                     panic!("expected callable");
                 };
                 return Value::StructInst(ty.clone(), Rc::new(RefCell::new(HashMap::new())));

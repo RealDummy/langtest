@@ -304,7 +304,6 @@ lazy_static::lazy_static! {
             ("while", While),
             ("struct", Struct),
             (".", Dot),
-            ("vec", Vec),
             ("enum", Enum),
         ])
     };
@@ -312,6 +311,7 @@ lazy_static::lazy_static! {
     static ref DUMB_NUMBER: Token = Token::Number("".into());
     static ref DUMB_SYMBOL: Token = Token::Symbol("".into());
     static ref LITERAL_TOKENS: [Token; 6] = [DUMB_ESCAPED_LITERAL.clone(), DUMB_NUMBER.clone(), DUMB_SYMBOL.clone(), Token::True, Token::False, Token::Print];
+    static ref VARIABLE_SEP_TOKENS: [Token; 13] = [Token::True, Token::False, Token::If, Token::Else, Token::Enum, Token::Struct, Token::Struct, Token::Return, Token::While, Token::Let, DUMB_ESCAPED_LITERAL.clone(), DUMB_NUMBER.clone(), DUMB_SYMBOL.clone()];
 }
 const EQUALITY_OP: &[Token] = {
     use Token::*;
@@ -701,12 +701,10 @@ fn extract_token(slice: Range<usize>, input: &str) -> Option<(Token, usize)> {
                 }
             };
             match extract_token(slice.end..slice.end+1, input) {
-                Some((t, _)) => {
-                    if matches!(t, Token::Symbol(_) | Token::EscapedLiteral(_) | Token::Number(_)) {
-                        ();
-                     } else{
-                        return extract_stringy_token(slice.clone(), input).map(|t| (t, slice.end))
-                    }
+                Some((t, _i)) => {
+                    if !VARIABLE_SEP_TOKENS.iter().any(|t2| t==*t2) {
+                        return extract_stringy_token(slice.clone(), input).map(|t| (t, slice.end));
+                     }
                 },
                 None => return extract_stringy_token(slice.clone(), input).map(|t| (t, slice.end)),
             }
@@ -782,5 +780,11 @@ fn assign() {
 #[test]
 fn block_spacing() {
     let input = "if 1==2{}";
+    parse(&mut Tokenized::new(input));
+}
+
+#[test]
+fn arrify() {
+    let input = "func arrify(){}";
     parse(&mut Tokenized::new(input));
 }
