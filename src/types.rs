@@ -1,142 +1,60 @@
+use crate::ast::Expr;
+use crate::eval;
+use std::collections::HashMap;
+use std::mem;
+use std::rc::Rc;
+use std::sync::Arc;
 
-use std::{cell::RefCell, collections::{HashMap, HashSet}, fmt::Debug, rc::Rc, sync::Arc};
-
-use crate::ast::Statement;
-
-type TypeId = u32;
-
-pub enum ConcreteTypes {
+enum Type {
     Int,
     String,
     Bool,
-    Func(usize),
-    EnumMember(usize),
-    Struct(usize),
+    Nothin,
+    Func(Vec<Type>, Box<Type>),
+    Struct()
 }
-impl ConcreteTypes {
-    pub fn type_id(&self) -> TypeId {
-        use ConcreteTypes::*;
-        match self {
-            Int => 1,
-            String => 2,
-            Bool => 3,
-            _ => todo!(), 
+
+impl PartialEq for Type {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Type::Func(..), t) => false,
+            (t1, t2) => {
+                mem::discriminant(t1) == mem::discriminant(t2)
+            }
         }
     }
 }
 
-
-#[derive(Clone, Debug)]
-pub enum Ty {
-    Explicit,
-    
-
+struct EnvNode {
+    parent: Rc<EnvNode>,
+    env: HashMap<Arc<str>, Type>,
 }
 
-#[derive(Clone, Debug)]
-pub struct EnvInner {
-    parent: Option<TypeEnv>,
-    scope: HashMap<Arc<str>, Ty>,
-}
-impl PartialEq for EnvInner {
-    fn eq(&self, _other: &Self) -> bool {
-        false
-    }
+struct TypeEnv {
+    inner: Rc<EnvNode>
 }
 
-#[derive(Clone, PartialEq)]
-pub struct TypeEnv {
-    inner: Rc<RefCell<EnvInner>>,
-    refs: HashSet<Arc<str>>,
-    ref_inner: Option<Rc<RefCell<EnvInner>>>,
-    n: usize,
-}
-
-impl Debug for TypeEnv {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("{}", self.n))
-    }
-}
-
-impl TypeEnv {
-    pub fn new() -> Self {
-        Self {
-            inner: Rc::new(RefCell::new(EnvInner {
-                parent: None,
-                scope: HashMap::new(),
-            })),
-            n: 0,
-            refs: HashSet::new(),
-            ref_inner: None,
+pub fn eval_type(expr: &Expr, env: &mut TypeEnv) -> Result<Type,()> {
+    match e {
+        Expr::Assign(var,value) => {
+            Ok(Type::Nothin)
         }
-    }
-    fn closure(&mut self) -> Self {
-        let parent_env = self.inner().parent.clone();
-        let mut shallow_env = TypeEnv::new();
-        shallow_env.inner().parent = parent_env;
-        shallow_env.refs.extend(self.inner().scope.keys().cloned());
-        shallow_env.ref_inner = Some(self.inner.clone());
-        return shallow_env;
-    }
-    fn inner<'a>(&'a mut self)-> std::cell::RefMut<'a, EnvInner> {
-        self.inner.as_ref().borrow_mut()
-    }
-    pub fn assign(&mut self, name: &Arc<str>, val: Ty) {
-        let None = self.inner().scope.insert(name.clone(), val.into()) else {
-            panic!();
-        };
-    }
-    pub fn find(&mut self, name: &str) -> Option<Ty> {
-        if Some(name) == self.refs.get(name).map(|v| v.as_ref()) {
-            return self.ref_inner.as_ref().unwrap().as_ref().borrow().scope.get(name).cloned()
+        Expr::FnCall(f, args) => {
+            let Type::Func(args_t, ret) = eval_type(&f, env).unwrap() else {
+                return Err(());
+            };
+            for (i,a) in args.iter().enumerate() {
+                if args_t[i] != eval_type(&a, env).unwrap() {
+                    return Err(());
+                }
+            }
+            Ok(*ret)
         }
-        let Some(foo) = self.inner().scope.get(name).cloned() else {
-            return self.inner().parent.as_mut().map(|p| p.find(name)).unwrap_or(None);
-        };
-        return Some(foo);
-    }
-    pub fn set(&mut self, name: &str, val: Ty) {
-        if Some(name) == self.refs.get(name).map(|v| v.as_ref()) {
-            self.ref_inner.as_ref().unwrap().borrow_mut().scope.get_mut(name).map(|v| *v = val);
-            return;
-        }
-        match self.inner().scope.get_mut(name) {
-            Some(v) => {
-                *v = val;
-                return;
-            },
-            None => (),
-        };
-        self.inner().parent.as_mut().map(|p| p.set(name, val)).unwrap();
-    }
-    pub fn push_scope(&mut self) {
-        *self = TypeEnv {
-            inner: Rc::new(RefCell::new(EnvInner {
-                scope: HashMap::new(),
-                parent: Some(self.clone()),
-            })),
-            n: self.n + 1,
-            refs: HashSet::new(),
-            ref_inner: None,
-        };
-        
-    }
-    pub fn pop_scope(&mut self) {
-        let p = self.inner().parent.clone().unwrap();
-        *self = p;
-    }
-}
+        Expr::Binary(lhs, op, rhs) => {
 
-pub struct TypeChecker {
-    prog: Vec<Statement>,
-}
-impl TypeChecker {
-    pub fn new(prog: Vec<Statement>) -> Self {
-        Self {
-            prog,
         }
-    }
-    pub fn check(&mut self) {
-        
+        Expr::Get(val, field) => {
+
+        }
     }
 }
